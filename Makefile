@@ -1,4 +1,4 @@
-CXXFLAGS = -O3 -Wall
+CXXFLAGS = -O3 -Wall -fopenmp
 CXX = g++
 
 
