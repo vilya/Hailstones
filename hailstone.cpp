@@ -3,6 +3,7 @@
 
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
+#include <tbb/tick_count.h>
 
 
 inline size_t NextHailstone(size_t n)
@@ -31,6 +32,7 @@ struct HailstoneGatherer
   const size_t _numBuckets;
   const size_t _maxLength;
   const size_t _bucketSize;
+
   size_t* _buckets;
   size_t _overflow;
 
@@ -101,26 +103,17 @@ int main(int argc, char** argv)
   size_t maxLength = atoll(argv[3]);
   size_t bucketSize = atoll(argv[4]);
 
+  tbb::tick_count startTime = tbb::tick_count::now();
+
   size_t numBuckets = maxLength / bucketSize;
   if (maxLength % bucketSize != 0)
     ++numBuckets;
 
-  /*
-  size_t* buckets = new size_t[numBuckets];
-  for (size_t i = 0; i < numBuckets; ++i)
-    buckets[i] = 0;
-  size_t overflow = 0;
-
-  for (size_t start = lower; start <= upper; ++start) {
-    size_t len = HailstoneSequenceLength(start, maxLength);
-    if (len > maxLength)
-      ++overflow;
-    else
-      ++buckets[(len - 1) / bucketSize];
-  }
-  */
   HailstoneGatherer gatherer(numBuckets, maxLength, bucketSize);
   tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper), gatherer);
+
+  tbb::tick_count endTime = tbb::tick_count::now();
+  printf("Counting finished in %g seconds.\n", (endTime - startTime).seconds());
 
   size_t* buckets = gatherer._buckets;
   size_t overflow = gatherer._overflow;
