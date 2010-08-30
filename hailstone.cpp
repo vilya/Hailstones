@@ -39,17 +39,29 @@ int main(int argc, char** argv)
     buckets[i] = 0;
   size_t overflow = 0;
 
-#pragma omp parallel for shared(overflow, buckets)
-  for (size_t start = lower; start <= upper; ++start) {
-    size_t len = HailstoneSequenceLength(start, maxLength);
-    if (len > maxLength) {
-#pragma omp atomic
-      ++overflow;
+  size_t localOverflow;
+  size_t* localBuckets;
+#pragma omp parallel shared(overflow, buckets) private(localOverflow, localBuckets)
+  {
+    localOverflow = 0;
+    localBuckets = new size_t[numBuckets];
+#pragma omp for
+    for (size_t start = lower; start <= upper; ++start) {
+      size_t len = HailstoneSequenceLength(start, maxLength);
+      if (len > maxLength) {
+        ++localOverflow;
+      }
+      else {
+        ++localBuckets[(len - 1) / bucketSize];
+      }
     }
-    else {
+
+    for (size_t b = 0; b < numBuckets; ++b) {
 #pragma omp atomic
-      ++buckets[(len - 1) / bucketSize];
+      buckets[b] += localBuckets[b];
     }
+#pragma omp atomic
+    overflow += localOverflow;
   }
 
   printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
