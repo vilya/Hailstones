@@ -98,6 +98,11 @@ struct HailstoneGatherer
 
 int main(int argc, char** argv)
 {
+  if (argc != 5) {
+    fprintf(stderr, "Usage: %s <lower> <upper> <max-length> <bucket-size>\n", argv[0]);
+    return -1;
+  }
+
   size_t lower = atoll(argv[1]);
   size_t upper = atoll(argv[2]);
   size_t maxLength = atoll(argv[3]);
