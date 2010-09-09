@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 
 static const size_t kTrailingBitsMask = 64 - 1;
@@ -15,26 +16,35 @@ static const unsigned char kNumTrailingZeroBits[64] = {
 };
 
 
+static const size_t kNumStoredSequences = (1 << 20);
+static size_t gSequenceLength[kNumStoredSequences];
+
+
 inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
 {
   size_t val = start;
-  size_t length = 1;
-  //printf("[%lu]", val);
+  size_t length = 0;
   while (length <= maxLength) {
+    if (val < kNumStoredSequences && gSequenceLength[val] != 0) {
+      length += gSequenceLength[val];
+      break;
+    }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
     while (numTrailingZeros > 0) {
       val >>= numTrailingZeros;
       length += numTrailingZeros;
-      //printf(" -> %lu", val);
       numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
     }
-    if (val == 1 || length > maxLength)
+    if (val == 1 || length > maxLength) {
+      length += 1;
       break;
+    }
     val = 3 * val + 1;
     ++length;
-    //printf(" -> %lu", val);
   }
-  //printf("\t[length: %lu]\n", length);
+  if (start < kNumStoredSequences && gSequenceLength[start] == 0)
+    gSequenceLength[start] = length;
+
   return length;
 }
 
@@ -59,6 +69,9 @@ int main(int argc, char** argv)
   for (size_t i = 0; i < numBuckets; ++i)
     buckets[i] = 0;
   size_t overflow = 0;
+
+  memset(gSequenceLength, 0, sizeof(size_t) * kNumStoredSequences);
+  gSequenceLength[1] = 1;
 
   // The important bit!
   for (size_t start = lower; start <= upper; ++start) {
