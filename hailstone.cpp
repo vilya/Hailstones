@@ -6,23 +6,39 @@
 #include <tbb/tick_count.h>
 
 
-inline size_t NextHailstone(size_t n)
-{
-  if (n % 2 == 0)
-    return n / 2;
-  else
-    return 3 * n + 1;
-}
+static const size_t kTrailingBitsMask = 64 - 1;
+static const unsigned char kNumTrailingZeroBits[64] = {
+  6, 0, 1, 0, 2, 0, 1, 0,
+  3, 0, 1, 0, 2, 0, 1, 0,
+  4, 0, 1, 0, 2, 0, 1, 0,
+  3, 0, 1, 0, 2, 0, 1, 0,
+  5, 0, 1, 0, 2, 0, 1, 0,
+  3, 0, 1, 0, 2, 0, 1, 0,
+  4, 0, 1, 0, 2, 0, 1, 0,
+  3, 0, 1, 0, 2, 0, 1, 0
+};
 
 
 inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
 {
   size_t val = start;
   size_t length = 1;
-  while (val != 1 && length <= maxLength) {
-    val = NextHailstone(val);
+  //printf("[%lu]", val);
+  while (length <= maxLength) {
+    size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    while (numTrailingZeros > 0) {
+      val >>= numTrailingZeros;
+      length += numTrailingZeros;
+      //printf(" -> %lu", val);
+      numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    }
+    if (val == 1 || length > maxLength)
+      break;
+    val = 3 * val + 1;
     ++length;
+    //printf(" -> %lu", val);
   }
+  //printf("\t[length: %lu]\n", length);
   return length;
 }
 
