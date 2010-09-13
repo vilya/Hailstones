@@ -30,15 +30,11 @@ void PopulateTrailingZeroBits()
 }
 
 
-inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
+inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength)
 {
   size_t val = start;
   size_t length = 0;
   while (length <= maxLength) {
-    if (val < kNumStoredSequences && gSequenceLength[val] != 0) {
-      length += gSequenceLength[val];
-      break;
-    }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
     while (numTrailingZeros > 0) {
       val >>= numTrailingZeros;
@@ -52,11 +48,57 @@ inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
     val = 3 * val + 1;
     ++length;
   }
-  if (start < kNumStoredSequences && gSequenceLength[start] == 0)
-    gSequenceLength[start] = length;
 
   return length;
 }
+
+
+inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
+{
+  size_t val = start;
+  size_t length = 0;
+  while (length <= maxLength) {
+    size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    while (numTrailingZeros > 0) {
+      val >>= numTrailingZeros;
+      length += numTrailingZeros;
+      numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    }
+
+    if (val < kNumStoredSequences) {
+      length += gSequenceLength[val];
+      break;
+    }
+    else if (length > maxLength) {
+      length += 1;
+      break;
+    }
+
+    val = 3 * val + 1;
+    ++length;
+  }
+
+  return length;
+}
+
+
+struct HailstoneFiller
+{
+  const size_t _maxLength;
+
+
+  HailstoneFiller(size_t maxLength) :
+    _maxLength(maxLength)
+  {
+  }
+
+
+  void operator () (const tbb::blocked_range<size_t>& range) const
+  {
+    for (size_t i = range.begin(); i != range.end(); ++i)
+      gSequenceLength[i] = HailstoneSequenceLengthUnstored(i, _maxLength);
+  }
+};
 
 
 struct HailstoneGatherer
@@ -108,11 +150,14 @@ struct HailstoneGatherer
     size_t overflow = _overflow;
 
     for (size_t i = range.begin(); i != range.end(); ++i) {
-      size_t len = HailstoneSequenceLength(i, maxLength);
+      size_t len = HailstoneSequenceLengthStored(i, maxLength);
       if (len > maxLength)
         ++overflow;
       else
         ++buckets[(len - 1) / bucketSize];
+
+      if (i < kNumStoredSequences)
+        ++gSequenceHitCount[i];
     }
 
     _overflow = overflow;
@@ -147,8 +192,15 @@ int main(int argc, char** argv)
   if (maxLength % bucketSize != 0)
     ++numBuckets;
 
+  gSequenceLength[0] = 0;
+  gSequenceLength[1] = 1;
+  HailstoneFiller filler(maxLength);
+  tbb::parallel_for(tbb::blocked_range<size_t>(2, kNumStoredSequences), filler);
+
+  memset(gSequenceHitCount, 0, sizeof(size_t) * kNumStoredSequences);
+
   HailstoneGatherer gatherer(numBuckets, maxLength, bucketSize);
-  tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper), gatherer);
+  tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherer);
 
   tbb::tick_count endTime = tbb::tick_count::now();
   printf("Counting finished in %g seconds.\n", (endTime - startTime).seconds());
