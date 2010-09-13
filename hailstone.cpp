@@ -9,7 +9,7 @@ static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
 static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
 
 
-static const size_t kNumStoredSequences = (1 << 20);
+static const size_t kNumStoredSequences = (1 << 15);
 static size_t gSequenceLength[kNumStoredSequences];
 
 
