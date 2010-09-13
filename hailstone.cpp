@@ -4,7 +4,7 @@
 
 
 static const size_t kTrailingBitsMask = 64 - 1;
-static const unsigned char kNumTrailingZeroBits[64] = {
+static const size_t kNumTrailingZeroBits[64] = {
   6, 0, 1, 0, 2, 0, 1, 0,
   3, 0, 1, 0, 2, 0, 1, 0,
   4, 0, 1, 0, 2, 0, 1, 0,
