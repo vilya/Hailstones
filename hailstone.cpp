@@ -6,39 +6,55 @@
 #include <tbb/tick_count.h>
 
 
-static const size_t kTrailingBitsMask = 64 - 1;
-static const unsigned char kNumTrailingZeroBits[64] = {
-  6, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  4, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  5, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  4, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0
-};
+static const size_t kTrailingBitsMaskSize = 8;
+static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
+static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
+static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
+
+
+static const size_t kNumStoredSequences = (1 << 15);
+static size_t gSequenceLength[kNumStoredSequences];
+
+
+void PopulateTrailingZeroBits()
+{
+  kNumTrailingZeroBits[0] = kTrailingBitsMaskSize;
+  for (size_t i = 1; i < kTrailingBitsLimit; ++i) {
+    size_t val = i;
+    kNumTrailingZeroBits[i] = 0;
+    while ((val & 0x1) == 0) {
+      val >>= 1;
+      ++kNumTrailingZeroBits[i];
+    }
+  }
+}
 
 
 inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
 {
   size_t val = start;
-  size_t length = 1;
-  //printf("[%lu]", val);
+  size_t length = 0;
   while (length <= maxLength) {
+    if (val < kNumStoredSequences && gSequenceLength[val] != 0) {
+      length += gSequenceLength[val];
+      break;
+    }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
     while (numTrailingZeros > 0) {
       val >>= numTrailingZeros;
       length += numTrailingZeros;
-      //printf(" -> %lu", val);
       numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
     }
-    if (val == 1 || length > maxLength)
+    if (val == 1 || length > maxLength) {
+      length += 1;
       break;
+    }
     val = 3 * val + 1;
     ++length;
-    //printf(" -> %lu", val);
   }
-  //printf("\t[length: %lu]\n", length);
+  if (start < kNumStoredSequences && gSequenceLength[start] == 0)
+    gSequenceLength[start] = length;
+
   return length;
 }
 
@@ -125,7 +141,8 @@ int main(int argc, char** argv)
   size_t bucketSize = atoll(argv[4]);
 
   tbb::tick_count startTime = tbb::tick_count::now();
-
+  
+  PopulateTrailingZeroBits();
   size_t numBuckets = maxLength / bucketSize;
   if (maxLength % bucketSize != 0)
     ++numBuckets;
