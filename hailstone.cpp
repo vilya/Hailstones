@@ -3,21 +3,28 @@
 #include <cstring>
 
 
-static const size_t kTrailingBitsMask = 64 - 1;
-static const size_t kNumTrailingZeroBits[64] = {
-  6, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  4, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  5, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0,
-  4, 0, 1, 0, 2, 0, 1, 0,
-  3, 0, 1, 0, 2, 0, 1, 0
-};
+static const size_t kTrailingBitsMaskSize = 8;
+static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
+static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
+static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
 
 
 static const size_t kNumStoredSequences = (1 << 20);
 static size_t gSequenceLength[kNumStoredSequences];
+
+
+void PopulateTrailingZeroBits()
+{
+  kNumTrailingZeroBits[0] = kTrailingBitsMaskSize;
+  for (size_t i = 1; i < kTrailingBitsLimit; ++i) {
+    size_t val = i;
+    kNumTrailingZeroBits[i] = 0;
+    while ((val & 0x1) == 0) {
+      val >>= 1;
+      ++kNumTrailingZeroBits[i];
+    }
+  }
+}
 
 
 inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
@@ -72,6 +79,8 @@ int main(int argc, char** argv)
 
   memset(gSequenceLength, 0, sizeof(size_t) * kNumStoredSequences);
   gSequenceLength[1] = 1;
+
+  PopulateTrailingZeroBits();
 
   // The important bit!
   for (size_t start = lower; start <= upper; ++start) {
