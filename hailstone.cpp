@@ -55,7 +55,7 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength);
 //
 
 static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
-static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
+static const size_t kNumStoredSequences = (1 << 15);  // Tunable parameter.
 
 static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
 static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
@@ -209,6 +209,7 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 
     if (val < kNumStoredSequences) {
       length += gSequenceLength[val];
+      ++gSequenceHitCount[val];
       break;
     }
     else if (length > maxLength) {
@@ -245,10 +246,28 @@ void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTi
 }
 
 
+void PrintTelemetry(const char* telemetryFile)
+{
+  if (telemetryFile == NULL)
+    return;
+
+  FILE* telemetry = fopen(telemetryFile, "w");
+  if (!telemetry) {
+    fprintf(stderr, "Error writing telemetry to %s\n", telemetryFile);
+    return;
+  }
+
+  for (size_t i = 0; i < kNumStoredSequences; ++i)
+    fprintf(telemetry, "%ld, %ld, %ld\n", i, gSequenceLength[i], gSequenceHitCount[i]);
+
+  fclose(telemetry);
+}
+
+
 int main(int argc, char** argv)
 {
-  if (argc != 5) {
-    fprintf(stderr, "Usage: %s <lower> <upper> <max-length> <bucket-size>\n", argv[0]);
+  if (argc != 5 && argc != 6) {
+    fprintf(stderr, "Usage: %s <lower> <upper> <max-length> <bucket-size> [<telemetry-file>]\n", argv[0]);
     return -1;
   }
 
@@ -256,6 +275,7 @@ int main(int argc, char** argv)
   size_t upper = atoll(argv[2]);
   size_t maxLength = atoll(argv[3]);
   size_t bucketSize = atoll(argv[4]);
+  const char* telemetryFile = (argc == 6) ? argv[5] : NULL;
 
   // Start timing.
   tbb::tick_count startTime = tbb::tick_count::now();
@@ -287,6 +307,7 @@ int main(int argc, char** argv)
   PrintResults(startTime, endTime,
       lower, upper, maxLength, bucketSize,
       numBuckets, gatherer._buckets, gatherer._overflow);
+  PrintTelemetry(telemetryFile);
 
   return 0;
 }
