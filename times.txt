@@ -1,0 +1,3 @@
+Computer,Lower,Upper,Max Length,Bucket Size,Time 1 (secs),Time 2 (secs),Time 3 (secs)
+Home,4000000000,4100000000,1000,100,10.5276,10.4717,10.4895
+Home,2,4294967295,1200,100,431.16,432.371,431.321
