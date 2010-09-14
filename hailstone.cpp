@@ -72,7 +72,6 @@ static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
 //
 
 static size_t gSequenceLength[kNumStoredSequences];
-static size_t gSequenceHitCount[kNumStoredSequences];
 
 
 //
@@ -271,9 +270,6 @@ int main(int argc, char** argv)
   gSequenceLength[1] = 1;
   HailstoneFiller filler(maxLength);
   tbb::parallel_for(tbb::blocked_range<size_t>(2, kNumStoredSequences), filler);
-
-  // Zero the hit count for each of the stored sequence lengths.
-  memset(gSequenceHitCount, 0, sizeof(size_t) * kNumStoredSequences);
 
   // Calculate the sequene lengths for the input range, using the lookup tables
   // where possible.
