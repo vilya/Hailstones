@@ -224,6 +224,27 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 }
 
 
+void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTime,
+    size_t lower, size_t upper, size_t maxLength, size_t bucketSize,
+    size_t numBuckets, size_t* buckets, size_t overflow)
+{
+  size_t total = 0;
+
+  printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
+  for (size_t i = 0; i < numBuckets; ++i) {
+    size_t low = i * bucketSize + 1;
+    size_t high = (i + 1) * bucketSize;
+    if (high > maxLength)
+      high = maxLength;
+    printf("%ld-%ld:\t%ld\n", low, high, buckets[i]);
+    total += buckets[i];
+  }
+  printf("%ld+:\t%ld\n", maxLength + 1, overflow);
+  printf("Total:\t%ld\n", total);
+  printf("Counting finished in %g seconds.\n", (endTime - startTime).seconds());
+}
+
+
 int main(int argc, char** argv)
 {
   if (argc != 5) {
@@ -236,37 +257,36 @@ int main(int argc, char** argv)
   size_t maxLength = atoll(argv[3]);
   size_t bucketSize = atoll(argv[4]);
 
+  // Start timing.
   tbb::tick_count startTime = tbb::tick_count::now();
   
+  // Fill in the lookup table for the number of trailing zero bits.
   PopulateTrailingZeroBits();
   size_t numBuckets = maxLength / bucketSize;
   if (maxLength % bucketSize != 0)
     ++numBuckets;
 
+  // Fill in the lookup table for sequence lengths of numbers up to kNumStoredSequences.
   gSequenceLength[0] = 0;
   gSequenceLength[1] = 1;
   HailstoneFiller filler(maxLength);
   tbb::parallel_for(tbb::blocked_range<size_t>(2, kNumStoredSequences), filler);
 
+  // Zero the hit count for each of the stored sequence lengths.
   memset(gSequenceHitCount, 0, sizeof(size_t) * kNumStoredSequences);
 
+  // Calculate the sequene lengths for the input range, using the lookup tables
+  // where possible.
   HailstoneGatherer gatherer(numBuckets, maxLength, bucketSize);
   tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherer);
 
+  // Stop timing.
   tbb::tick_count endTime = tbb::tick_count::now();
-  printf("Counting finished in %g seconds.\n", (endTime - startTime).seconds());
 
-  size_t* buckets = gatherer._buckets;
-  size_t overflow = gatherer._overflow;
-  printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
-  for (size_t i = 0; i < numBuckets; ++i) {
-    size_t low = i * bucketSize + 1;
-    size_t high = (i + 1) * bucketSize;
-    if (high > maxLength)
-      high = maxLength;
-    printf("%ld-%ld:\t%ld\n", low, high, buckets[i]);
-  }
-  printf("%ld+:\t%ld\n", maxLength + 1, overflow);
+  // Print the results.
+  PrintResults(startTime, endTime,
+      lower, upper, maxLength, bucketSize,
+      numBuckets, gatherer._buckets, gatherer._overflow);
 
   return 0;
 }
