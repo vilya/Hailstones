@@ -1,20 +1,162 @@
 #include <cstdlib>
 #include <cstdio>
 
-#include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
 #include <tbb/tick_count.h>
 
 
-static const size_t kTrailingBitsMaskSize = 8;
+//
+// Type declarations
+//
+
+// Used to pre-fill the sequence length table.
+struct HailstoneFiller
+{
+  const size_t _maxLength;
+
+  HailstoneFiller(size_t maxLength);
+  void operator () (const tbb::blocked_range<size_t>& range) const;
+};
+
+
+// Use to calculate sequence lengths using the lookup table where possible, but
+// falling back to calculating the hard way where necessary.
+struct HailstoneGatherer
+{
+  const size_t _numBuckets;
+  const size_t _maxLength;
+  const size_t _bucketSize;
+
+  size_t* _buckets;
+  size_t _overflow;
+
+  HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t bucketSize);
+  HailstoneGatherer(HailstoneGatherer& other, tbb::split);
+  ~HailstoneGatherer();
+
+  void operator () (const tbb::blocked_range<size_t>& range);
+  void join(HailstoneGatherer& rhs);
+};
+
+
+//
+// Function declarations
+//
+
+void PopulateTrailingZeroBits();
+inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength);
+inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength);
+
+
+//
+// Constants
+//
+
+static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
+static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
+
 static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
 static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
+
+// Lookup table for the number of trailing zero bits in an 8 bit number.
+// This is written to only during the PopulateTrailingZeroBits function.
+// Anywhere else, it should be treated as a constant.
 static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
 
 
-static const size_t kNumStoredSequences = (1 << 15);
-static size_t gSequenceLength[kNumStoredSequences];
 
+//
+// Globals
+//
+
+static size_t gSequenceLength[kNumStoredSequences];
+static size_t gSequenceHitCount[kNumStoredSequences];
+
+
+//
+// HailstoneFiller methods
+//
+
+HailstoneFiller::HailstoneFiller(size_t maxLength) :
+  _maxLength(maxLength)
+{
+}
+
+
+void HailstoneFiller::operator () (const tbb::blocked_range<size_t>& range) const
+{
+  for (size_t i = range.begin(); i != range.end(); ++i)
+    gSequenceLength[i] = HailstoneSequenceLengthUnstored(i, _maxLength);
+}
+
+
+//
+// HailstoneGatherer methods
+//
+
+HailstoneGatherer::HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t bucketSize) :
+  _numBuckets(numBuckets),
+  _maxLength(maxLength),
+  _bucketSize(bucketSize),
+  _buckets(new size_t[numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGatherer::HailstoneGatherer(HailstoneGatherer& other, tbb::split) :
+  _numBuckets(other._numBuckets),
+  _maxLength(other._maxLength),
+  _bucketSize(other._bucketSize),
+  _buckets(new size_t[other._numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGatherer::~HailstoneGatherer()
+{
+  delete[] _buckets;
+}
+
+
+void HailstoneGatherer::operator () (const tbb::blocked_range<size_t>& range)
+{
+  const size_t maxLength = _maxLength;
+  const size_t bucketSize = _bucketSize;
+
+  size_t* buckets = _buckets;
+  size_t overflow = _overflow;
+
+  for (size_t i = range.begin(); i != range.end(); ++i) {
+    size_t len = HailstoneSequenceLengthStored(i, maxLength);
+    if (len > maxLength)
+      ++overflow;
+    else
+      ++buckets[(len - 1) / bucketSize];
+  }
+
+  _overflow = overflow;
+}
+
+
+void HailstoneGatherer::join(HailstoneGatherer& rhs)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] += rhs._buckets[i];
+  _overflow += rhs._overflow;
+}
+
+
+//
+// Functions
+//
 
 void PopulateTrailingZeroBits()
 {
@@ -80,97 +222,6 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 
   return length;
 }
-
-
-struct HailstoneFiller
-{
-  const size_t _maxLength;
-
-
-  HailstoneFiller(size_t maxLength) :
-    _maxLength(maxLength)
-  {
-  }
-
-
-  void operator () (const tbb::blocked_range<size_t>& range) const
-  {
-    for (size_t i = range.begin(); i != range.end(); ++i)
-      gSequenceLength[i] = HailstoneSequenceLengthUnstored(i, _maxLength);
-  }
-};
-
-
-struct HailstoneGatherer
-{
-  const size_t _numBuckets;
-  const size_t _maxLength;
-  const size_t _bucketSize;
-
-  size_t* _buckets;
-  size_t _overflow;
-
-
-  HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t bucketSize) :
-    _numBuckets(numBuckets),
-    _maxLength(maxLength),
-    _bucketSize(bucketSize),
-    _buckets(new size_t[numBuckets]),
-    _overflow(0)
-  {
-    for (size_t i = 0; i < _numBuckets; ++i)
-      _buckets[i] = 0;
-  }
-
-
-  HailstoneGatherer(HailstoneGatherer& other, tbb::split) :
-    _numBuckets(other._numBuckets),
-    _maxLength(other._maxLength),
-    _bucketSize(other._bucketSize),
-    _buckets(new size_t[other._numBuckets]),
-    _overflow(0)
-  {
-    for (size_t i = 0; i < _numBuckets; ++i)
-      _buckets[i] = 0;
-  }
-
-
-  ~HailstoneGatherer()
-  {
-    delete[] _buckets;
-  }
-
-
-  void operator () (const tbb::blocked_range<size_t>& range)
-  {
-    const size_t maxLength = _maxLength;
-    const size_t bucketSize = _bucketSize;
-
-    size_t* buckets = _buckets;
-    size_t overflow = _overflow;
-
-    for (size_t i = range.begin(); i != range.end(); ++i) {
-      size_t len = HailstoneSequenceLengthStored(i, maxLength);
-      if (len > maxLength)
-        ++overflow;
-      else
-        ++buckets[(len - 1) / bucketSize];
-
-      if (i < kNumStoredSequences)
-        ++gSequenceHitCount[i];
-    }
-
-    _overflow = overflow;
-  }
-
-
-  void join(HailstoneGatherer& rhs)
-  {
-    for (size_t i = 0; i < _numBuckets; ++i)
-      _buckets[i] += rhs._buckets[i];
-    _overflow += rhs._overflow;
-  }
-};
 
 
 int main(int argc, char** argv)
