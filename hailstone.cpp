@@ -211,7 +211,6 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
       break;
     }
     else if (length > maxLength) {
-      length += 1;
       break;
     }
 
