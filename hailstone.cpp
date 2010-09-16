@@ -227,7 +227,7 @@ void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTi
     size_t lower, size_t upper, size_t maxLength, size_t bucketSize,
     size_t numBuckets, size_t* buckets, size_t overflow)
 {
-  size_t total = 0;
+  size_t total = overflow;
 
   printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
   for (size_t i = 0; i < numBuckets; ++i) {
