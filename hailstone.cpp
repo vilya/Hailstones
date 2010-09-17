@@ -174,20 +174,15 @@ void PopulateTrailingZeroBits()
 inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength)
 {
   size_t val = start;
-  size_t length = 0;
-  while (length <= maxLength) {
+  size_t length = 1;
+  while (length <= maxLength && val != 1) {
+    if ((val & 0x1) != 0) {
+      val = 3 * val + 1;
+      ++length;
+    }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    while (numTrailingZeros > 0) {
-      val >>= numTrailingZeros;
-      length += numTrailingZeros;
-      numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    }
-    if (val == 1 || length > maxLength) {
-      length += 1;
-      break;
-    }
-    val = 3 * val + 1;
-    ++length;
+    val >>= numTrailingZeros;
+    length += numTrailingZeros;
   }
 
   return length;
@@ -198,25 +193,18 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 {
   size_t val = start;
   size_t length = 0;
-  while (length <= maxLength) {
+  while (length <= maxLength && val >= kNumStoredSequences) {
+    if ((val & 0x1) != 0) {
+      val = 3 * val + 1;
+      ++length;
+    }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    while (numTrailingZeros > 0) {
-      val >>= numTrailingZeros;
-      length += numTrailingZeros;
-      numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    }
-
-    if (val < kNumStoredSequences) {
-      length += gSequenceLength[val];
-      break;
-    }
-    else if (length > maxLength) {
-      break;
-    }
-
-    val = 3 * val + 1;
-    ++length;
+    val >>= numTrailingZeros;
+    length += numTrailingZeros;
   }
+
+  if (length <= maxLength)
+    length += gSequenceLength[val];
 
   return length;
 }
