@@ -2,16 +2,46 @@
 #include <cstdio>
 #include <cstring>
 
+#include <tbb/tick_count.h>
 
-static const size_t kTrailingBitsMaskSize = 8;
+
+//
+// Function declarations
+//
+
+void PopulateTrailingZeroBits();
+inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength);
+inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength);
+
+
+//
+// Constants
+//
+
+static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
+static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
+
 static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
 static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
+
+// Lookup table for the number of trailing zero bits in an 8 bit number.
+// This is written to only during the PopulateTrailingZeroBits function.
+// Anywhere else, it should be treated as a constant.
 static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
 
 
-static const size_t kNumStoredSequences = (1 << 15);
+
+//
+// Globals
+//
+
 static size_t gSequenceLength[kNumStoredSequences];
 
+
+
+//
+// Functions
+//
 
 void PopulateTrailingZeroBits()
 {
@@ -27,32 +57,63 @@ void PopulateTrailingZeroBits()
 }
 
 
-inline size_t HailstoneSequenceLength(size_t start, size_t maxLength)
+inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength)
+{
+  size_t val = start;
+  size_t length = 1;
+  while (length <= maxLength && val != 1) {
+    if ((val & 0x1) != 0) {
+      val = (val << 1) + val + 1;
+      ++length;
+    }
+    size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    val >>= numTrailingZeros;
+    length += numTrailingZeros;
+  }
+
+  return length;
+}
+
+
+inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 {
   size_t val = start;
   size_t length = 0;
-  while (length <= maxLength) {
-    if (val < kNumStoredSequences && gSequenceLength[val] != 0) {
-      length += gSequenceLength[val];
-      break;
+  while (length <= maxLength && val >= kNumStoredSequences) {
+    if ((val & 0x1) != 0) {
+      val = (val << 1) + val + 1;
+      ++length;
     }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    while (numTrailingZeros > 0) {
-      val >>= numTrailingZeros;
-      length += numTrailingZeros;
-      numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
-    }
-    if (val == 1 || length > maxLength) {
-      length += 1;
-      break;
-    }
-    val = 3 * val + 1;
-    ++length;
+    val >>= numTrailingZeros;
+    length += numTrailingZeros;
   }
-  if (start < kNumStoredSequences && gSequenceLength[start] == 0)
-    gSequenceLength[start] = length;
+
+  if (length <= maxLength)
+    length += gSequenceLength[val];
 
   return length;
+}
+
+
+void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTime,
+    size_t lower, size_t upper, size_t maxLength, size_t bucketSize,
+    size_t numBuckets, size_t* buckets, size_t overflow)
+{
+  size_t total = overflow;
+
+  printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
+  for (size_t i = 0; i < numBuckets; ++i) {
+    size_t low = i * bucketSize + 1;
+    size_t high = (i + 1) * bucketSize;
+    if (high > maxLength)
+      high = maxLength;
+    printf("%ld-%ld:\t%ld\n", low, high, buckets[i]);
+    total += buckets[i];
+  }
+  printf("%ld+:\t%ld\n", maxLength + 1, overflow);
+  printf("Total:\t%ld\n", total);
+  printf("Counting finished in %g seconds.\n", (endTime - startTime).seconds());
 }
 
 
@@ -77,29 +138,35 @@ int main(int argc, char** argv)
     buckets[i] = 0;
   size_t overflow = 0;
 
-  memset(gSequenceLength, 0, sizeof(size_t) * kNumStoredSequences);
-  gSequenceLength[1] = 1;
-
+  // Start timing.
+  tbb::tick_count startTime = tbb::tick_count::now();
+  
+  // Fill in the lookup table for the number of trailing zero bits.
   PopulateTrailingZeroBits();
 
-  // The important bit!
+  // Fill in the lookup table for sequence lengths of numbers up to kNumStoredSequences.
+  gSequenceLength[0] = 0;
+  gSequenceLength[1] = 1;
+  for (size_t i = 2; i < kNumStoredSequences; ++i)
+    gSequenceLength[i] = HailstoneSequenceLengthUnstored(i, maxLength);
+  
+  // Calculate the sequence lengths for the input range, using the lookup tables
+  // where possible.
   for (size_t start = lower; start <= upper; ++start) {
-    size_t len = HailstoneSequenceLength(start, maxLength);
+    size_t len = HailstoneSequenceLengthStored(start, maxLength);
     if (len > maxLength)
       ++overflow;
     else
       ++buckets[(len - 1) / bucketSize];
   }
 
-  printf("Counts of hailstone sequence lengths for range %ld-%ld:\n", lower, upper);
-  for (size_t i = 0; i < numBuckets; ++i) {
-    size_t low = i * bucketSize + 1;
-    size_t high = (i + 1) * bucketSize;
-    if (high > maxLength)
-      high = maxLength;
-    printf("%ld-%ld:\t%ld\n", low, high, buckets[i]);
-  }
-  printf("%ld+:\t%ld\n", maxLength + 1, overflow);
+  // Stop timing.
+  tbb::tick_count endTime = tbb::tick_count::now();
+
+  // Print the results.
+  PrintResults(startTime, endTime,
+      lower, upper, maxLength, bucketSize,
+      numBuckets, buckets, overflow);
 
   return 0;
 }
