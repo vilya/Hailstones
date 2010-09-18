@@ -177,7 +177,7 @@ inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength)
   size_t length = 1;
   while (length <= maxLength && val != 1) {
     if ((val & 0x1) != 0) {
-      val = 3 * val + 1;
+      val = (val << 1) + val + 1;
       ++length;
     }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
@@ -195,7 +195,7 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
   size_t length = 0;
   while (length <= maxLength && val >= kNumStoredSequences) {
     if ((val & 0x1) != 0) {
-      val = 3 * val + 1;
+      val = (val << 1) + val + 1;
       ++length;
     }
     size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
