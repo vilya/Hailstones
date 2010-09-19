@@ -1,0 +1,127 @@
+Efficient parallel calculation of hailstone number sequence lengths
+
+
+Key points:
+-----------
+* Try to avoid doing duplicate work.
+* Sometimes it's quicker to do duplicate work than to do all the checks to
+  avoid it.
+* Avoid branching in inner loops where possible.
+* Exploit the structure of the problem to reduce the amount of calculation
+* required.
+* The compiler may not be doing all the optimisations you expect it to.
+* Allowing a benign data race is much faster than locking, while remaining
+  correct.
+
+
+Approach:
+---------
+* Build up a table of trailing zero-bit counts for the numbers 0-255.
+* Fill a lookup table of the first 2^20 sequence lengths using the uncached
+  sequence length calculation[1]. This is done in parallel using TBB's
+  parallel_for construct.
+* Calculate the sequence lengths for the input range using the cached sequence
+  length calculation [2]. This is done in parallel using TBB's parallel_reduce
+  construct because we want to combine the sequence lengths counted by each
+  thread when they complete.
+* Combine the sequence lengths into buckets. This is done serially, because
+  it's a simple calculation over a small number of values.
+
+
+Optimisations:
+--------------
+* While calculating a sequence length, if we pass the maximum length we can
+  stop and use whatever length we're currently on. It doesn't have to be
+  maxLength + 1 exactly.
+  
+* When a number is even it gets divided by two. If the result of that is even,
+  it will get divided by two again and so on. This is equivalent to
+  right-shifting by the number of trailing zero bits. So we speed it up by
+  masking out the last 8 bits of the number and using them as an index into a
+  lookup table which tells us the number of trailing zero bits. We right-shift
+  the value by that amount and add it to the sequence length as well.
+
+* We know that sequences don't repeat (according to MathWorld & Wikipedia it's
+  been proven for the range of numbers we care about), so if we encounter a
+  number that we already know a sequence length for then we know how long the
+  remainder of the sequence is. So we can simply add that amount to the
+  sequence length and we're done.
+
+* We know, thanks to Wikipedia, that the longest sequence for numbers less
+  than 10 billion is 1132 items. That's small enough that we can easily store
+  an individual count for every distinct sequence length. If we do that, we
+  don't have to calculate a bucket number or check whether we're using the
+  overflow bucket.
+
+* For even numbers, most of the time we don't have to calculate the length in
+  full. Instead we can arrange our loops to iterate over the odd numbers only
+  and calculate lengths for all even multiples of each one by repeatedly
+  doubling the number and incrementing the length.
+
+  At the lower end of our input range this aproach may not have processed all
+  the even numbers. We account for this by processing all even numbers as well
+  between lower and 2*lower.
+
+* The code which fills the sequence length lookup table is separate to the
+  code which calculates the sequence lengths for our input range. Although it
+  is quite similar, combining them would mean adding conditional checks which
+  slow things down noticeably.
+
+* Multiplying by 3 can be rewritten as a right-shift and an addition. This
+  turns out to be faster. I would have expected the compiler to be making
+  optimisations like this for me, but it turns out not to.
+
+
+What went right
+---------------
+* Starting with the single threaded version allowed me to check that my code
+  was correct. It was also easy to experiment with, so I was able to try out
+  various algorithmic improvements quickly and reject the ones that didn't
+  work out as well.
+
+* TBB was a good choice. I tried out OpenMP as well, but I found TBB to be
+  better documented and more performant. I never seriously considered using
+  raw pthreads or boost::thread.
+
+* Keeping a record of my run times across a few different input ranges allowed
+  me to easily (and objectively) check whether any change was really an
+  improvement.
+
+* I used size_t variables for everything right from the start. This turned out
+  to be a good choice: I later saw reports of people who were getting integer
+  overflows due to using 32-bit ints for the intermediate sequence values. It
+  does mean that my code wouldn't work correctly on a 32-bit machine, but all
+  of the testing machines (and all of my development machines) are 64-bit
+  anyway.
+
+
+
+What went wrong:
+----------------
+* I wasted a bit of time chasing down errors because I didn't notice that the
+  maximum length was inclusive rather than exclusive. Should have read the
+  problem statement more closely the first time through. Sigh.
+
+* I got complacent because of the slow times posted in the forum and wasn't
+  going to optimise my program further. At this point it was taking about 10
+  seconds to calculate the sequence lengths from 4,000,000,000 to
+  4,100,000,000 whereas all the other results posted were over a minute for
+  the same range.
+
+  Fortunately, after I posted my times I got a wake up call. I realised that
+  some of the earlier posters had improved their times dramatically and that
+  there were others who were simply keeping quiet about their times. This
+  brought me back into optimising and I found a few very nice wasy to speed
+  things up as a result.
+
+* I wasn't able to get onto the MTL for testing, so I was effectively
+  submitting my entry blind. I left it quite late in the competition before I
+  tried to connect to the MTL; if I had've tried sooner I would have had more
+  time to resolve the difficulties and may have been able to resolve them. As
+  it was, I ran out of time.
+
+* I'm doing a lot of redundant calculation to set up the sequence length
+  lookup table, but I wasn't able to come up with a more efficient way of
+  populating it. If I was developing this code further, I would look for ways
+  of populating it more sparsely and put in checks to decide whether to use it
+  or not.
