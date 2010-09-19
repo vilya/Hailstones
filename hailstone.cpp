@@ -9,6 +9,33 @@
 
 
 //
+// Constants
+//
+
+static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
+static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
+
+static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
+static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
+
+// Lookup table for the number of trailing zero bits in an 8 bit number.
+// This is written to only during the PopulateTrailingZeroBits function.
+// Anywhere else, it should be treated as a constant.
+static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
+
+// Maximum possible sequence length for numbers less than 2^32 is 1137. We
+// leave a tiny bit of wiggle room though...
+static const size_t kMaxPossibleLength = 1140;
+
+
+//
+// Globals
+//
+
+static size_t gSequenceLength[kNumStoredSequences];
+
+
+//
 // Type declarations
 //
 
@@ -26,18 +53,14 @@ struct HailstoneFiller
 // falling back to calculating the hard way where necessary.
 struct HailstoneGathererFull
 {
-  const size_t _numBuckets;
   const size_t _maxLength;
-  const size_t _bucketSize;
   const size_t _lower;
   const size_t _upper;
 
-  size_t* _buckets;
-  size_t _overflow;
+  size_t _buckets[kMaxPossibleLength];
 
-  HailstoneGathererFull(size_t numBuckets, size_t maxLength, size_t bucketSize, size_t lower, size_t upper);
+  HailstoneGathererFull(size_t maxLength, size_t lower, size_t upper);
   HailstoneGathererFull(HailstoneGathererFull& other, tbb::split);
-  ~HailstoneGathererFull();
 
   void operator () (const tbb::blocked_range<size_t>& range);
   void join(HailstoneGathererFull& rhs);
@@ -51,30 +74,11 @@ struct HailstoneGathererFull
 void PopulateTrailingZeroBits();
 inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength);
 inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength);
-
-
-//
-// Constants
-//
-
-static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
-static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
-
-static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
-static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
-
-// Lookup table for the number of trailing zero bits in an 8 bit number.
-// This is written to only during the PopulateTrailingZeroBits function.
-// Anywhere else, it should be treated as a constant.
-static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
-
-
-
-//
-// Globals
-//
-
-static size_t gSequenceLength[kNumStoredSequences];
+inline void FillBuckets(const size_t lengthCounts[], size_t maxLength,
+    size_t bucketSize, size_t numBuckets, size_t buckets[], size_t& overflow);
+void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTime,
+    size_t lower, size_t upper, size_t maxLength, size_t bucketSize,
+    size_t numBuckets, size_t* buckets, size_t overflow);
 
 
 //
@@ -109,58 +113,36 @@ void HailstoneFiller::operator () (const tbb::blocked_range<size_t>& range) cons
 // HailstoneGathererFull methods
 //
 
-HailstoneGathererFull::HailstoneGathererFull(size_t numBuckets, size_t maxLength, size_t bucketSize,
-    size_t lower, size_t upper) :
-  _numBuckets(numBuckets),
+HailstoneGathererFull::HailstoneGathererFull(size_t maxLength, size_t lower, size_t upper) :
   _maxLength(maxLength),
-  _bucketSize(bucketSize),
   _lower(lower),
-  _upper(upper),
-  _buckets(new size_t[numBuckets]),
-  _overflow(0)
+  _upper(upper)
 {
-  for (size_t i = 0; i < _numBuckets; ++i)
-    _buckets[i] = 0;
+  memset(_buckets, 0, sizeof(size_t) * kMaxPossibleLength);
 }
 
 
 HailstoneGathererFull::HailstoneGathererFull(HailstoneGathererFull& other, tbb::split) :
-  _numBuckets(other._numBuckets),
   _maxLength(other._maxLength),
-  _bucketSize(other._bucketSize),
   _lower(other._lower),
-  _upper(other._upper),
-  _buckets(new size_t[other._numBuckets]),
-  _overflow(0)
+  _upper(other._upper)
 {
-  for (size_t i = 0; i < _numBuckets; ++i)
-    _buckets[i] = 0;
-}
-
-
-HailstoneGathererFull::~HailstoneGathererFull()
-{
-  delete[] _buckets;
+  memset(_buckets, 0, sizeof(size_t) * kMaxPossibleLength);
 }
 
 
 void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range)
 {
   const size_t maxLength = _maxLength;
-  const size_t bucketSize = _bucketSize;
   const size_t upper = _upper;
 
   size_t* buckets = _buckets;
-  size_t overflow = _overflow;
 
   const size_t kSplit = std::min(_lower * 2, upper);
   if (kSplit >= upper) {
     for (size_t i = range.begin(); i < range.end(); ++i) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
-      if (len <= maxLength)
-        ++buckets[(len - 1) / bucketSize];
-      else
-        ++overflow;
+      ++buckets[len];
     }
   }
   else {
@@ -168,14 +150,10 @@ void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range
     for (i = range.begin(); i < kSplit; ++i) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
-      while (val <= upper && len <= maxLength) {
-        ++buckets[(len - 1) / bucketSize];
+      while (val <= upper) {
+        ++buckets[len];
         val <<= 1;
         ++len;
-      }
-      while (val <= upper) {
-        ++overflow;
-        val <<= 1;
       }
     }
     if ((i & 0x1) == 0)
@@ -183,26 +161,20 @@ void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range
     for (; i < range.end(); i += 2) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
-      while (val <= upper && len <= maxLength) {
-        ++buckets[(len - 1) / bucketSize];
+      while (val <= upper) {
+        ++buckets[len];
         val <<= 1;
         ++len;
       }
-      while (val <= upper) {
-        ++overflow;
-        val <<= 1;
-      }
     }
   }
-  _overflow = overflow;
 }
 
 
 void HailstoneGathererFull::join(HailstoneGathererFull& rhs)
 {
-  for (size_t i = 0; i < _numBuckets; ++i)
+  for (size_t i = 0; i < kMaxPossibleLength; ++i)
     _buckets[i] += rhs._buckets[i];
-  _overflow += rhs._overflow;
 }
 
 
@@ -263,6 +235,27 @@ inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 }
 
 
+inline void FillBuckets(const size_t lengthCounts[], size_t maxLength, size_t bucketSize, size_t numBuckets, size_t buckets[], size_t& overflow)
+{
+  for (size_t i = 0; i < numBuckets; ++i) {
+    size_t low = i * bucketSize + 1;
+    size_t high = (i + 1) * bucketSize;
+    if (high > kMaxPossibleLength - 1)
+      high = kMaxPossibleLength - 1;
+    else if (high > maxLength)
+      high = maxLength;
+
+    buckets[i] = 0;
+    for (size_t j = low; j <= high; ++j)
+      buckets[i] += lengthCounts[j];
+  }
+
+  overflow = 0;
+  for (size_t j = maxLength + 1; j < kMaxPossibleLength; ++j)
+    overflow += lengthCounts[j];
+}
+
+
 void PrintResults(const tbb::tick_count& startTime, const tbb::tick_count& endTime,
     size_t lower, size_t upper, size_t maxLength, size_t bucketSize,
     size_t numBuckets, size_t* buckets, size_t overflow)
@@ -312,13 +305,13 @@ int main(int argc, char** argv)
 
   // Calculate the sequence lengths for the input range, using the lookup tables
   // where possible.
-  size_t* buckets;
-  size_t overflow;
-
-  HailstoneGathererFull gatherFull(numBuckets, maxLength, bucketSize, lower, upper);
+  HailstoneGathererFull gatherFull(maxLength, lower, upper);
   tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
-  buckets = gatherFull._buckets;
-  overflow = gatherFull._overflow;
+
+  // Combine the length counts into their buckets.
+  size_t buckets[kMaxPossibleLength];
+  size_t overflow;
+  FillBuckets(gatherFull._buckets, maxLength, bucketSize, numBuckets, buckets, overflow);
 
   // Stop timing.
   tbb::tick_count endTime = tbb::tick_count::now();
