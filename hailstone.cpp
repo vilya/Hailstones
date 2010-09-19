@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 
@@ -23,7 +24,7 @@ struct HailstoneFiller
 
 // Use to calculate sequence lengths using the lookup table where possible, but
 // falling back to calculating the hard way where necessary.
-struct HailstoneGatherer
+struct HailstoneGathererFull
 {
   const size_t _numBuckets;
   const size_t _maxLength;
@@ -32,12 +33,50 @@ struct HailstoneGatherer
   size_t* _buckets;
   size_t _overflow;
 
-  HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t bucketSize);
-  HailstoneGatherer(HailstoneGatherer& other, tbb::split);
-  ~HailstoneGatherer();
+  HailstoneGathererFull(size_t numBuckets, size_t maxLength, size_t bucketSize);
+  HailstoneGathererFull(HailstoneGathererFull& other, tbb::split);
+  ~HailstoneGathererFull();
 
   void operator () (const tbb::blocked_range<size_t>& range);
-  void join(HailstoneGatherer& rhs);
+  void join(HailstoneGathererFull& rhs);
+};
+
+
+struct HailstoneGathererLowerPart
+{
+  const size_t _numBuckets;
+  const size_t _maxLength;
+  const size_t _bucketSize;
+  const size_t _upper;
+
+  size_t* _buckets;
+  size_t _overflow;
+
+  HailstoneGathererLowerPart(size_t numBuckets, size_t maxLength, size_t bucketSize, size_t upper);
+  HailstoneGathererLowerPart(HailstoneGathererLowerPart& other, tbb::split);
+  ~HailstoneGathererLowerPart();
+
+  void operator () (const tbb::blocked_range<size_t>& range);
+  void join(HailstoneGathererLowerPart& rhs);
+};
+
+
+struct HailstoneGathererUpperPart
+{
+  const size_t _numBuckets;
+  const size_t _maxLength;
+  const size_t _bucketSize;
+  const size_t _upper;
+
+  size_t* _buckets;
+  size_t _overflow;
+
+  HailstoneGathererUpperPart(size_t numBuckets, size_t maxLength, size_t bucketSize, size_t upper);
+  HailstoneGathererUpperPart(HailstoneGathererUpperPart& other, tbb::split);
+  ~HailstoneGathererUpperPart();
+
+  void operator () (const tbb::blocked_range<size_t>& range);
+  void join(HailstoneGathererUpperPart& rhs);
 };
 
 
@@ -86,16 +125,27 @@ HailstoneFiller::HailstoneFiller(size_t maxLength) :
 
 void HailstoneFiller::operator () (const tbb::blocked_range<size_t>& range) const
 {
-  for (size_t i = range.begin(); i != range.end(); ++i)
-    gSequenceLength[i] = HailstoneSequenceLengthUnstored(i, _maxLength);
+  const size_t maxLength = _maxLength;
+
+  size_t i = range.begin();
+  i += 1 - (i & 0x1); // Make sure i is odd by incrementing it if it's even.
+  for (; i < range.end(); i += 2) {
+    size_t len = HailstoneSequenceLengthUnstored(i, maxLength);
+    size_t val = i;
+    while (val < kNumStoredSequences) {
+      gSequenceLength[val] = len;
+      val <<= 1;
+      ++len;
+    }
+  }
 }
 
 
 //
-// HailstoneGatherer methods
+// HailstoneGathererFull methods
 //
 
-HailstoneGatherer::HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t bucketSize) :
+HailstoneGathererFull::HailstoneGathererFull(size_t numBuckets, size_t maxLength, size_t bucketSize) :
   _numBuckets(numBuckets),
   _maxLength(maxLength),
   _bucketSize(bucketSize),
@@ -107,7 +157,7 @@ HailstoneGatherer::HailstoneGatherer(size_t numBuckets, size_t maxLength, size_t
 }
 
 
-HailstoneGatherer::HailstoneGatherer(HailstoneGatherer& other, tbb::split) :
+HailstoneGathererFull::HailstoneGathererFull(HailstoneGathererFull& other, tbb::split) :
   _numBuckets(other._numBuckets),
   _maxLength(other._maxLength),
   _bucketSize(other._bucketSize),
@@ -119,13 +169,13 @@ HailstoneGatherer::HailstoneGatherer(HailstoneGatherer& other, tbb::split) :
 }
 
 
-HailstoneGatherer::~HailstoneGatherer()
+HailstoneGathererFull::~HailstoneGathererFull()
 {
   delete[] _buckets;
 }
 
 
-void HailstoneGatherer::operator () (const tbb::blocked_range<size_t>& range)
+void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range)
 {
   const size_t maxLength = _maxLength;
   const size_t bucketSize = _bucketSize;
@@ -133,19 +183,163 @@ void HailstoneGatherer::operator () (const tbb::blocked_range<size_t>& range)
   size_t* buckets = _buckets;
   size_t overflow = _overflow;
 
-  for (size_t i = range.begin(); i != range.end(); ++i) {
+  for (size_t i = range.begin(); i < range.end(); ++i) {
     size_t len = HailstoneSequenceLengthStored(i, maxLength);
-    if (len > maxLength)
-      ++overflow;
-    else
+    if (len <= maxLength)
       ++buckets[(len - 1) / bucketSize];
+    else
+      ++overflow;
   }
 
   _overflow = overflow;
 }
 
 
-void HailstoneGatherer::join(HailstoneGatherer& rhs)
+void HailstoneGathererFull::join(HailstoneGathererFull& rhs)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] += rhs._buckets[i];
+  _overflow += rhs._overflow;
+}
+
+
+//
+// HailstoneGathererLowerPart methods
+//
+
+HailstoneGathererLowerPart::HailstoneGathererLowerPart(size_t numBuckets, size_t maxLength, size_t bucketSize, size_t upper) :
+  _numBuckets(numBuckets),
+  _maxLength(maxLength),
+  _bucketSize(bucketSize),
+  _upper(upper),
+  _buckets(new size_t[numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGathererLowerPart::HailstoneGathererLowerPart(HailstoneGathererLowerPart& other, tbb::split) :
+  _numBuckets(other._numBuckets),
+  _maxLength(other._maxLength),
+  _bucketSize(other._bucketSize),
+  _upper(other._upper),
+  _buckets(new size_t[other._numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGathererLowerPart::~HailstoneGathererLowerPart()
+{
+  delete[] _buckets;
+}
+
+
+void HailstoneGathererLowerPart::operator () (const tbb::blocked_range<size_t>& range)
+{
+  const size_t maxLength = _maxLength;
+  const size_t bucketSize = _bucketSize;
+  const size_t upper = _upper;
+
+  size_t* buckets = _buckets;
+  size_t overflow = _overflow;
+
+  for (size_t i = range.begin(); i < range.end(); ++i) {
+    size_t len = HailstoneSequenceLengthStored(i, maxLength);
+    size_t val = i;
+    while (val <= upper && len <= maxLength) {
+      ++buckets[(len - 1) / bucketSize];
+      val <<= 1;
+      ++len;
+    }
+    while (val <= upper) {
+      ++overflow;
+      val <<= 1;
+    }
+  }
+
+  _overflow = overflow;
+}
+
+
+void HailstoneGathererLowerPart::join(HailstoneGathererLowerPart& rhs)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] += rhs._buckets[i];
+  _overflow += rhs._overflow;
+}
+
+
+//
+// HailstoneGathererUpperPart methods
+//
+
+HailstoneGathererUpperPart::HailstoneGathererUpperPart(size_t numBuckets, size_t maxLength, size_t bucketSize, size_t upper) :
+  _numBuckets(numBuckets),
+  _maxLength(maxLength),
+  _bucketSize(bucketSize),
+  _upper(upper),
+  _buckets(new size_t[numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGathererUpperPart::HailstoneGathererUpperPart(HailstoneGathererUpperPart& other, tbb::split) :
+  _numBuckets(other._numBuckets),
+  _maxLength(other._maxLength),
+  _bucketSize(other._bucketSize),
+  _upper(other._upper),
+  _buckets(new size_t[other._numBuckets]),
+  _overflow(0)
+{
+  for (size_t i = 0; i < _numBuckets; ++i)
+    _buckets[i] = 0;
+}
+
+
+HailstoneGathererUpperPart::~HailstoneGathererUpperPart()
+{
+  delete[] _buckets;
+}
+
+
+void HailstoneGathererUpperPart::operator () (const tbb::blocked_range<size_t>& range)
+{
+  const size_t maxLength = _maxLength;
+  const size_t bucketSize = _bucketSize;
+  const size_t upper = _upper;
+
+  size_t* buckets = _buckets;
+  size_t overflow = _overflow;
+
+  size_t i = range.begin();
+  i += 1 - (i & 0x1); // Make sure i is odd by incrementing it if it's even.
+  for (; i < range.end(); i += 2) {
+    size_t len = HailstoneSequenceLengthStored(i, maxLength);
+    size_t val = i;
+    while (val <= upper && len <= maxLength) {
+      ++buckets[(len - 1) / bucketSize];
+      val <<= 1;
+      ++len;
+    }
+    while (val <= upper) {
+      ++overflow;
+      val <<= 1;
+    }
+  }
+
+  _overflow = overflow;
+}
+
+
+void HailstoneGathererUpperPart::join(HailstoneGathererUpperPart& rhs)
 {
   for (size_t i = 0; i < _numBuckets; ++i)
     _buckets[i] += rhs._buckets[i];
@@ -254,22 +448,40 @@ int main(int argc, char** argv)
 
   // Fill in the lookup table for sequence lengths of numbers up to kNumStoredSequences.
   gSequenceLength[0] = 0;
-  gSequenceLength[1] = 1;
   HailstoneFiller filler(maxLength);
-  tbb::parallel_for(tbb::blocked_range<size_t>(2, kNumStoredSequences), filler);
+  tbb::parallel_for(tbb::blocked_range<size_t>(1, kNumStoredSequences), filler);
 
-  // Calculate the sequene lengths for the input range, using the lookup tables
+  // Calculate the sequence lengths for the input range, using the lookup tables
   // where possible.
-  HailstoneGatherer gatherer(numBuckets, maxLength, bucketSize);
-  tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherer);
+  size_t* buckets;
+  size_t overflow;
+
+  const size_t split = std::min(lower * 2, upper + 1);
+  if (split * 2 <= upper) {
+    HailstoneGathererLowerPart gatherLow(numBuckets, maxLength, bucketSize, upper);
+    HailstoneGathererUpperPart gatherHigh(numBuckets, maxLength, bucketSize, upper);
+    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, split), gatherLow);
+    tbb::parallel_reduce(tbb::blocked_range<size_t>(split, upper + 1), gatherHigh);
+
+    buckets = gatherLow._buckets;
+    for (size_t i = 0; i < numBuckets; ++i)
+      buckets[i] += gatherHigh._buckets[i];
+    overflow = gatherLow._overflow + gatherHigh._overflow;
+  }
+  else {
+    HailstoneGathererFull gatherFull(numBuckets, maxLength, bucketSize);
+    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
+
+    buckets = gatherFull._buckets;
+    overflow = gatherFull._overflow;
+  }
 
   // Stop timing.
   tbb::tick_count endTime = tbb::tick_count::now();
 
   // Print the results.
   PrintResults(startTime, endTime,
-      lower, upper, maxLength, bucketSize,
-      numBuckets, gatherer._buckets, gatherer._overflow);
+      lower, upper, maxLength, bucketSize, numBuckets, buckets, overflow);
 
   return 0;
 }
