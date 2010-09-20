@@ -151,6 +151,7 @@ void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
       while (val <= upper) {
+        //fprintf(stderr, "len(%ld) = %ld\n", val, len);
         ++buckets[len];
         val <<= 1;
         ++len;
@@ -162,6 +163,7 @@ void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
       while (val <= upper) {
+        //fprintf(stderr, "len(%ld) = %ld\n", val, len);
         ++buckets[len];
         val <<= 1;
         ++len;
@@ -304,9 +306,13 @@ int main(int argc, char** argv)
   tbb::parallel_for(tbb::blocked_range<size_t>(1, kNumStoredSequences), filler);
 
   // Calculate the sequence lengths for the input range, using the lookup tables
-  // where possible.
+  // where possible. Testing suggests that it's actually faster to do this on a
+  // single thread if the range fits entirely into our lookup table(!).
   HailstoneGathererFull gatherFull(maxLength, lower, upper);
-  tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
+  if (upper >= kNumStoredSequences)
+    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
+  else 
+    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1, kNumStoredSequences), gatherFull);
 
   // Combine the length counts into their buckets.
   size_t buckets[kMaxPossibleLength];
