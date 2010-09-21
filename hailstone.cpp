@@ -15,14 +15,6 @@
 static const size_t kTrailingBitsMaskSize = 8;        // Tunable parameter.
 static const size_t kNumStoredSequences = (1 << 20);  // Tunable parameter.
 
-static const size_t kTrailingBitsLimit = 1 << kTrailingBitsMaskSize;
-static const size_t kTrailingBitsMask = kTrailingBitsLimit - 1;
-
-// Lookup table for the number of trailing zero bits in an 8 bit number.
-// This is written to only during the PopulateTrailingZeroBits function.
-// Anywhere else, it should be treated as a constant.
-static size_t kNumTrailingZeroBits[kTrailingBitsLimit];
-
 // Maximum possible sequence length for numbers less than 2^32 is 1137. We
 // leave a tiny bit of wiggle room though...
 static const size_t kMaxPossibleLength = 1140;
@@ -71,7 +63,6 @@ struct HailstoneGathererFull
 // Function declarations
 //
 
-void PopulateTrailingZeroBits();
 inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength);
 inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength);
 inline void FillBuckets(const size_t lengthCounts[], size_t maxLength,
@@ -184,48 +175,36 @@ void HailstoneGathererFull::join(HailstoneGathererFull& rhs)
 // Functions
 //
 
-void PopulateTrailingZeroBits()
-{
-  kNumTrailingZeroBits[0] = kTrailingBitsMaskSize;
-  for (size_t i = 1; i < kTrailingBitsLimit; ++i) {
-    size_t val = i;
-    kNumTrailingZeroBits[i] = 0;
-    while ((val & 0x1) == 0) {
-      val >>= 1;
-      ++kNumTrailingZeroBits[i];
-    }
-  }
-}
-
-
 inline size_t HailstoneSequenceLengthUnstored(size_t start, size_t maxLength)
 {
   size_t val = start;
-  size_t length = 1;
+  size_t length = __builtin_ctzll(val);
+  val >>= length;
+  
   while (length <= maxLength && val != 1) {
-    if ((val & 0x1) != 0) {
-      val = (val << 1) + val + 1;
-      ++length;
-    }
-    size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    val = (val << 1) + val + 1;
+    ++length;
+ 
+    size_t numTrailingZeros = __builtin_ctzll(val);
     val >>= numTrailingZeros;
     length += numTrailingZeros;
   }
 
-  return length;
+  return length + 1;
 }
 
 
 inline size_t HailstoneSequenceLengthStored(size_t start, size_t maxLength)
 {
   size_t val = start;
-  size_t length = 0;
+  size_t length = __builtin_ctzll(val);
+  val >>= length;
+
   while (length <= maxLength && val >= kNumStoredSequences) {
-    if ((val & 0x1) != 0) {
-      val = (val << 1) + val + 1;
-      ++length;
-    }
-    size_t numTrailingZeros = kNumTrailingZeroBits[val & kTrailingBitsMask];
+    val = (val << 1) + val + 1;
+    ++length;
+
+    size_t numTrailingZeros = __builtin_ctzll(val);
     val >>= numTrailingZeros;
     length += numTrailingZeros;
   }
@@ -294,12 +273,6 @@ int main(int argc, char** argv)
   // Start timing.
   tbb::tick_count startTime = tbb::tick_count::now();
   
-  // Fill in the lookup table for the number of trailing zero bits.
-  PopulateTrailingZeroBits();
-  size_t numBuckets = maxLength / bucketSize;
-  if (maxLength % bucketSize != 0)
-    ++numBuckets;
-
   // Fill in the lookup table for sequence lengths of numbers up to kNumStoredSequences.
   gSequenceLength[0] = 0;
   HailstoneFiller filler(maxLength);
@@ -315,6 +288,9 @@ int main(int argc, char** argv)
     tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1, kNumStoredSequences), gatherFull);
 
   // Combine the length counts into their buckets.
+  size_t numBuckets = maxLength / bucketSize;
+  if (maxLength % bucketSize != 0)
+    ++numBuckets;
   size_t buckets[kMaxPossibleLength];
   size_t overflow;
   FillBuckets(gatherFull._buckets, maxLength, bucketSize, numBuckets, buckets, overflow);
