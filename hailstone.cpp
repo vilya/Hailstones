@@ -125,11 +125,12 @@ HailstoneGathererFull::HailstoneGathererFull(HailstoneGathererFull& other, tbb::
 void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range)
 {
   const size_t maxLength = _maxLength;
+  const size_t lower = _lower;
   const size_t upper = _upper;
 
   size_t* buckets = _buckets;
 
-  const size_t kSplit = std::min(_lower * 2, upper);
+  const size_t kSplit = std::min(_lower * 2, range.end());
   if (kSplit >= upper) {
     for (size_t i = range.begin(); i < range.end(); ++i) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
@@ -137,24 +138,26 @@ void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range
     }
   }
   else {
-    size_t i;
-    for (i = range.begin(); i < kSplit; ++i) {
+    // First pass: even numbers.
+    size_t i = range.begin();
+    i += (i & 0x1);
+    for (; i < kSplit; i += 2) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
       while (val <= upper) {
-        //fprintf(stderr, "len(%ld) = %ld\n", val, len);
         ++buckets[len];
         val <<= 1;
         ++len;
       }
     }
-    if ((i & 0x1) == 0)
-      ++i;
+
+    // Second pass: odd numbers.
+    i = range.begin();
+    i += 1 - (i & 0x1);
     for (; i < range.end(); i += 2) {
       size_t len = HailstoneSequenceLengthStored(i, maxLength);
       size_t val = i;
       while (val <= upper) {
-        //fprintf(stderr, "len(%ld) = %ld\n", val, len);
         ++buckets[len];
         val <<= 1;
         ++len;
