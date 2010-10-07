@@ -125,7 +125,6 @@ HailstoneGathererFull::HailstoneGathererFull(HailstoneGathererFull& other, tbb::
 void HailstoneGathererFull::operator () (const tbb::blocked_range<size_t>& range)
 {
   const size_t maxLength = _maxLength;
-  const size_t lower = _lower;
   const size_t upper = _upper;
 
   size_t* buckets = _buckets;
@@ -282,13 +281,9 @@ int main(int argc, char** argv)
   tbb::parallel_for(tbb::blocked_range<size_t>(1, kNumStoredSequences), filler);
 
   // Calculate the sequence lengths for the input range, using the lookup tables
-  // where possible. Testing suggests that it's actually faster to do this on a
-  // single thread if the range fits entirely into our lookup table(!).
+  // where possible.
   HailstoneGathererFull gatherFull(maxLength, lower, upper);
-  if (upper >= kNumStoredSequences)
-    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
-  else 
-    tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1, kNumStoredSequences), gatherFull);
+  tbb::parallel_reduce(tbb::blocked_range<size_t>(lower, upper + 1), gatherFull);
 
   // Combine the length counts into their buckets.
   size_t numBuckets = maxLength / bucketSize;
